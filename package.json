@@ -8,6 +8,11 @@
     "format": "prettier --write \"**/*.{ts,tsx,md}\"",
     "check-types": "turbo run check-types"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "ffmpeg-runner"
+  ],
   "devDependencies": {
     "prettier": "^3.5.3",
     "turbo": "^2.5.3",

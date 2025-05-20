@@ -1,0 +1,16 @@
+{
+  "name": "shared",
+  "version": "1.0.0",
+  "description": "Shared types and utilities for video streaming app",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "exports": {
+    "./types": "./types/index.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.2.2"
+  }
+}
