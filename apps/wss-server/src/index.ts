@@ -10,7 +10,16 @@ interface Room {
   pendingPeers: Map<string, WebSocket>
   isLocked: boolean
   viewers: Map<string, WebSocket>
+  adminName: string
+  peerNames: Map<string, string>
+  pendingPeerNames: Map<string, string>
 }
+
+const generateRoomCode = () => {
+  const code = Math.random().toString(36).substring(2, 8).toUpperCase()
+  return code
+}
+
 
 const wss = new WebSocketServer({ port: 3001 })
 const rooms = new Map<string, Room>()
@@ -20,83 +29,93 @@ wss.on('connection', (ws: WebSocket) => {
     const data = JSON.parse(message)
 
     switch (data.type) {
-      case 'join-room': {
-        const { roomId, roomCode, isAdmin } = data
-
-        // Check if room exists
-        const existingRoom = rooms.get(roomId)
-        if (isAdmin) {
-          if (existingRoom) {
-            // Room exists - check if it's locked
-            if (existingRoom.isLocked) {
-              ws.send(JSON.stringify({
-                type: 'join-room-error',
-                error: 'Room is locked by another admin'
-              }))
-              return
-            }
-
-            // Take over as admin
-            existingRoom.admin = ws
-            existingRoom.isLocked = true
-
+      case 'create-room': {
+        const { roomId, name } = data;
+        const roomCode = generateRoomCode();
+        // If the room already exists and is locked, reject
+        const existingRoom = rooms.get(roomId);
+        if (existingRoom) {
+          if (existingRoom.isLocked) {
             ws.send(JSON.stringify({
-              type: 'room-created',
-              roomId,
-              success: true,
-              roomCode,
-              isAdmin: true
-            }))
-          } else {
-            // Create new room
-            const adminId = uuidv4()
-            const room: Room = {
-              id: roomId,
-              adminId,
-              admin: ws,
-              roomCode,
-              peers: new Map(),
-              pendingPeers: new Map(),
-              viewers: new Map(), 
-              isLocked: true,
-            }
-            rooms.set(roomId, room)
-            ws.send(JSON.stringify({
-              type: 'room-created',
-              roomId,
-              adminId,
-              success: true,
-              isAdmin: true
-            }))
+              type: 'join-room-error',
+              error: 'Room is locked by another admin'
+            }));
+            return;
           }
+          // Take over as new admin
+          existingRoom.admin = ws;
+          existingRoom.isLocked = true;
+          existingRoom.adminName = name;
+          ws.send(JSON.stringify({
+            type: 'room-created',
+            roomId,
+            adminId: existingRoom.adminId,
+            success: true,
+            roomCode,
+            isAdmin: true,
+            name
+          }));
         } else {
-          // Join existing room
-          if (!existingRoom) {
-            ws.send(JSON.stringify({
-              type: 'join-room-error',
-              error: 'Room not found'
-            }))
-            return
-          }
-
-          if (existingRoom.roomCode !== roomCode) {
-            ws.send(JSON.stringify({
-              type: 'join-room-error',
-              error: 'Invalid room code'
-            }))
-            return
-          }
-
-          const peerId = uuidv4()
-          existingRoom.pendingPeers.set(peerId, ws)
-
-          // Notify admin of join request
-          existingRoom.admin.send(JSON.stringify({
-            type: 'participant-request',
-            participantId: peerId
-          }))
+          // Create brand-new room
+          const adminId = uuidv4();
+          const room: Room = {
+            id: roomId,
+            adminId,
+            admin: ws,
+            roomCode,
+            peers: new Map(),
+            pendingPeers: new Map(),
+            viewers: new Map(),
+            isLocked: true,
+            adminName: name,
+            peerNames: new Map(),
+            pendingPeerNames: new Map()
+          };
+          rooms.set(roomId, room);
+          ws.send(JSON.stringify({
+            type: 'room-created',
+            roomId,
+            adminId,
+            roomCode,
+            success: true,
+            isAdmin: true,
+            name
+          }));
         }
-        break
+        break;
+      }    
+      case 'join-room': {
+        const { roomId, roomCode, name } = data;
+
+        // Must already exist
+        const existingRoom = rooms.get(roomId);
+        if (!existingRoom) {
+          ws.send(JSON.stringify({
+            type: 'join-room-error',
+            error: 'Room not found'
+          }));
+          return;
+        }
+
+        // Validate code
+        if (existingRoom.roomCode !== roomCode) {
+          ws.send(JSON.stringify({
+            type: 'join-room-error',
+            error: 'Invalid room code'
+          }));
+          return;
+        }
+
+        // Queue peer and notify admin
+        const peerId = uuidv4();
+        existingRoom.pendingPeers.set(peerId, ws);
+        existingRoom.pendingPeerNames.set(peerId, name);
+        existingRoom.admin.send(JSON.stringify({
+          type: 'participant-request',
+          participantId: peerId,
+          name
+        }));
+        break;
       }
 
       case 'lock-room': {
@@ -136,14 +155,18 @@ wss.on('connection', (ws: WebSocket) => {
 
         if (room && room.pendingPeers.has(targetId)) {
           const peer = room.pendingPeers.get(targetId)!
+          const peerName = room.pendingPeerNames.get(targetId)!;
           room.peers.set(targetId, peer)
+          room.peerNames.set(targetId, peerName);
           room.pendingPeers.delete(targetId)
+          room.pendingPeerNames.delete(targetId);
 
           // Notify accepted peer
           peer.send(JSON.stringify({
             type: 'join-accepted',
             peerId: targetId,
-            roomId
+            roomId,
+            name: peerName
           }))
 
           // Notify all peers in room
@@ -152,7 +175,8 @@ wss.on('connection', (ws: WebSocket) => {
               peer.send(JSON.stringify({
                 type: 'participant-joined',
                 participantId: targetId,
-                roomId
+                roomId,
+                name: peerName
               }))
             }
           })
@@ -162,11 +186,12 @@ wss.on('connection', (ws: WebSocket) => {
             viewer.send(JSON.stringify({
               type: 'peer-joined',
               roomId,
-              peerId: targetId
+              peerId: targetId,
+              name: peerName
             }))
           })
 
-          ws.send(JSON.stringify({ type: 'accept-peer-success', participantId: targetId, roomId }));
+          ws.send(JSON.stringify({ type: 'accept-peer-success', participantId: targetId, roomId, name: peerName }));
         }
         break
       }
@@ -273,7 +298,8 @@ wss.on('connection', (ws: WebSocket) => {
 
       case 'leave-room': {
         const { roomId, peerId } = data
-        const room = rooms.get(roomId)
+        const room = rooms.get(roomId);
+        const peerName = room?.peerNames.get(peerId);
 
         if (room) {
           // If admin leaves, notify all peers and close room
@@ -281,14 +307,16 @@ wss.on('connection', (ws: WebSocket) => {
             room.peers.forEach(peer => {
               peer.send(JSON.stringify({
                 type: 'room-closed',
-                roomId
+                roomId,
+                name: peerName
               }))
             })
 
             room.viewers.forEach(viewer => {
               viewer.send(JSON.stringify({
                 type: 'room-closed',
-                roomId
+                roomId,
+                name: peerName
               }))
             })
 
@@ -301,7 +329,8 @@ wss.on('connection', (ws: WebSocket) => {
             room.admin.send(JSON.stringify({
               type: 'participant-left',
               participantId: peerId,
-              roomId
+              roomId,
+              name: peerName
             }))
 
             // Notify remaining peers
@@ -309,7 +338,8 @@ wss.on('connection', (ws: WebSocket) => {
               peer.send(JSON.stringify({
                 type: 'participant-left',
                 participantId: peerId,
-                roomId
+                roomId,
+                name: peerName
               }))
             })
 
@@ -317,7 +347,8 @@ wss.on('connection', (ws: WebSocket) => {
             room.viewers.forEach(viewer => {
               viewer.send(JSON.stringify({
                 type: 'peer-left',
-                peerId
+                peerId,
+                name: peerName
               }))
             })
           }

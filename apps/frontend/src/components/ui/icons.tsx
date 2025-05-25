@@ -24,6 +24,7 @@ import {
   X,
   Copy,
   CameraOff,
+  Menu,
 } from "lucide-react";
 
 export const Icons = {
@@ -51,4 +52,5 @@ export const Icons = {
   logOut: LogOut,
   x: X,
   copy: Copy,
+  menu: Menu,
 };
