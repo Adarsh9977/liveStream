@@ -258,14 +258,6 @@ export default function StreamRoom() {
     tracked.pendingCandidates.length = 0;
   }
 
-  const createRemoteVideo = (peerId: string) => {
-    const videoElement = document.createElement('video');
-    videoElement.autoplay = true;
-    videoElement.playsInline = true;
-    remoteVideoRefs.current.set(peerId, videoElement);
-    return videoElement;
-}
-
   const handleOffer = async ({ sourceId, offer, targetId, roomId }: any) => {
     const peerConnection = createPeerConnection(sourceId, roomId)
 
@@ -357,16 +349,48 @@ export default function StreamRoom() {
   }
 
   const handleParticipantLeft = ({ participantId }: any) => {
-    const peerConnection = peerConnections.current.get(participantId)
+    // Clean up peer connection
+    const peerConnection = peerConnections.current.get(participantId);
     if (peerConnection) {
-      peerConnection.peerConnection.close()
-      peerConnections.current.delete(participantId)
+    // Stop all tracks from this peer
+    peerConnection.peerConnection.getSenders().forEach(sender => {
+      if (sender.track) {
+        sender.track.stop();
+      }
+    });
+    peerConnection.peerConnection.getReceivers().forEach(receiver => {
+      if (receiver.track) {
+        receiver.track.stop();
+      }
+    });
+      
+      // Close and remove the peer connection
+      peerConnection.peerConnection.close();
+      peerConnections.current.delete(participantId);
     }
-    remoteVideoRefs.current.delete(participantId);
-    remoteStreams.current.delete(participantId);
-    setPeers((prev) => prev.filter((id) => id !== participantId))
-    forceUpdate({});
-  }
+  
+    // Clean up remote stream
+    const remoteStream = remoteStreams.current.get(participantId);
+    if (remoteStream) {
+      remoteStream.getTracks().forEach(track => {
+        track.stop();
+      });
+      remoteStreams.current.delete(participantId);
+    }
+  
+    // Clean up video element reference
+    const videoElement = remoteVideoRefs.current.get(participantId);
+    if (videoElement) {
+      videoElement.srcObject = null;
+      remoteVideoRefs.current.delete(participantId);
+    }
+
+    // Update peers list
+    setPeers(prev => prev.filter(id => id !== participantId));
+  
+    // Notify about participant leaving
+    toast.info(`Participant ${participantId.substring(0, 6)} left the room`);
+  };
 
   const handleStartStream = async () => {
     try {
@@ -449,9 +473,53 @@ export default function StreamRoom() {
   }
 
   const handleLeaveRoom = async () => {
-    ws.current?.send(JSON.stringify({ type: "leave-room", roomId, peerId: clientIdRef.current }))
-    setIsConnected(false)
-  }
+    // Notify server about leaving
+    ws.current?.send(JSON.stringify({ 
+      type: "leave-room",
+      roomId,
+      peerId: clientIdRef.current 
+    }));
+
+    // Stop all local tracks
+    if (localStream.current) {
+      localStream.current.getTracks().forEach(track => {
+        track.stop();
+      });
+      localStream.current = null;
+    }
+
+    // Clear local video element
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+    }
+  
+    // Stop and clear all remote streams
+    remoteStreams.current.forEach(stream => {
+      stream.getTracks().forEach(track => track.stop());
+    });
+    remoteStreams.current.clear();
+  
+    // Close all peer connections
+    peerConnections.current.forEach(connection => {
+      connection.peerConnection.close();
+    });
+    peerConnections.current.clear();
+  
+    // Reset all states
+    setIsConnected(false);
+    setIsAdmin(false);
+    setPeers([]);
+    setPendingPeers([]);
+    setRoomId('');
+    setRoomCode('');
+    setIsMuted(false);
+    setIsVideoOff(false);
+    
+    // Reset refs
+    adminId.current = null;
+    clientIdRef.current = null;
+    isRoomLocked.current = false;
+  };
 
   const handleToggleMute = () => {
     if (localStream.current) {

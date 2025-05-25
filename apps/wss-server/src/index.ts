@@ -297,6 +297,13 @@ wss.on('connection', (ws: WebSocket) => {
             // Remove the leaving peer using provided peerId
             room.peers.delete(peerId)
 
+            //Notify Admin of leaving participant
+            room.admin.send(JSON.stringify({
+              type: 'participant-left',
+              participantId: peerId,
+              roomId
+            }))
+
             // Notify remaining peers
             room.peers.forEach(peer => {
               peer.send(JSON.stringify({
