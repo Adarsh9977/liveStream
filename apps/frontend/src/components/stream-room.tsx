@@ -171,8 +171,6 @@ export default function StreamRoom() {
     }
   }
 
-  console.log("remote video refs", remoteStreams)
-
 
   const generateRoomCode = () => {
     const code = Math.random().toString(36).substring(2, 8).toUpperCase()
@@ -233,13 +231,6 @@ export default function StreamRoom() {
               return;
           }
           remoteStreams.current.set(peerId, stream);
-          let videoElement = remoteVideoRefs.current.get(peerId);
-          if (!videoElement) {
-              videoElement = createRemoteVideo(peerId);
-          }
-          videoElement.srcObject = stream;
-          videoElement.play().catch(console.error);
-          forceUpdate({});
       }
   
     localStream.current?.getTracks().forEach((track) => {
@@ -457,24 +448,6 @@ export default function StreamRoom() {
       })
   }
 
-  // const handleAcceptPeer = (peerId: string) => {
-  //   ws.current?.send(JSON.stringify({
-  //     type: "accept-peer",
-  //     targetId: peerId,
-  //     roomId
-  //   }))
-  //   setPendingPeers(prev => prev.filter(id => id !== peerId))
-  // }
-
-  // const handleRejectPeer = (peerId: string) => {
-  //   ws.current?.send(JSON.stringify({
-  //     type: "reject-peer",
-  //     targetId: peerId,
-  //     roomId
-  //   }))
-  //   setPendingPeers(prev => prev.filter(id => id !== peerId))
-  // }
-
   const handleLeaveRoom = async () => {
     ws.current?.send(JSON.stringify({ type: "leave-room", roomId, peerId: clientIdRef.current }))
     setIsConnected(false)
@@ -484,22 +457,65 @@ export default function StreamRoom() {
     if (localStream.current) {
       const audioTracks = localStream.current.getAudioTracks()
       audioTracks.forEach(track => {
-        track.enabled = !track.enabled
+        track.enabled = isMuted ? true : false
       })
       setIsMuted(!isMuted)
     }
   }
 
-  const handleToggleVideo = () => {
-    if (localStream.current) {
-      const videoTracks = localStream.current.getVideoTracks()
-      videoTracks.forEach(track => {
-        track.enabled = !track.enabled
-      })
-      setIsVideoOff(!isVideoOff)
+  const handleToggleVideo = async () => {
+    if (!localStream.current) return;
+  
+    // Determine the new "on/off" state
+    const willEnable = isVideoOff; // if video is off, we will enable
+    let newTrack: MediaStreamTrack | null = null;
+  
+    if (willEnable) {
+      // 🔄 Turn camera back ON
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        newTrack = newStream.getVideoTracks()[0];
+  
+        // Swap tracks in each RTCPeerConnection
+        peerConnections.current.forEach(({ peerConnection }) => {
+          const sender = peerConnection
+            .getSenders()
+            .find(s => s.track?.kind === "video");
+          if (sender && newTrack) {
+            sender.replaceTrack(newTrack);
+          }
+        });
+  
+        // Remove any old video track, add the new one
+        const oldVideoTrack = localStream.current
+          .getVideoTracks()[0];
+        if (oldVideoTrack) {
+          oldVideoTrack.stop();
+          localStream.current.removeTrack(oldVideoTrack);
+        }
+        if (newTrack) {
+          localStream.current.addTrack(newTrack);
+        }
+      } catch (err) {
+        console.error("Failed to restart video:", err);
+        toast.error("Failed to restart camera");
+        return;
+      }
+    } else {
+      // 🛑 Turn camera OFF completely
+      localStream.current.getVideoTracks().forEach(track => {
+        track.enabled = false;
+        setTimeout(() => {
+          track.stop();
+        }, 5);
+        localStream.current?.removeTrack(track);
+      });
     }
-  }
 
+    // Flip state and notify peers of the *new* enabled value
+    setIsVideoOff(!isVideoOff);
+  };
+  
   return (
     <div className="container max-w-7xl mx-auto px-4 py-6">
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -524,12 +540,6 @@ export default function StreamRoom() {
                   className={`w-full h-full object-cover ${isVideoOff ? 'opacity-0' : 'opacity-100'}`} 
                 />
 
-                {isVideoOff && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-                    <Icons.camera className="w-16 h-16 text-gray-500 opacity-30" />
-                  </div>
-                )}
-
                 {/* Video controls overlay */}
                 <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 opacity-0 group-hover:opacity-100 transition-opacity">
                   <div className="flex items-center justify-between">
@@ -543,13 +553,13 @@ export default function StreamRoom() {
                         {isMuted ? <Icons.micOff className="h-4 w-4" /> : <Icons.mic className="h-4 w-4" />}
                       </Button>
 
-                      <Button 
-                        variant="ghost" 
+                      <Button
+                        variant="ghost"
                         size="icon"
                         className="h-8 w-8 rounded-full bg-background/20 text-white hover:bg-background/40"
                         onClick={handleToggleVideo}
                       >
-                        <Icons.camera className="h-4 w-4" />
+                        { isVideoOff  ? <Icons.cameraOff className="h-4 w-4" /> : <Icons.camera className="h-4 w-4" /> }
                       </Button>
                     </div>
 
@@ -570,7 +580,11 @@ export default function StreamRoom() {
                                 const stream = remoteStreams.current.get(peerId);
                                 el.srcObject = stream || null;
                                 remoteVideoRefs.current.set(peerId, el);
-                                if (stream) el.play().catch(console.error);
+                                if (stream){
+                                  setTimeout(() => {
+                                    el.play().catch(console.error);
+                                  }, 0);
+                                }
                             }
                         }}
                         autoPlay

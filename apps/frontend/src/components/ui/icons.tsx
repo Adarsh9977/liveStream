@@ -23,6 +23,7 @@ import {
   LogOut,
   X,
   Copy,
+  CameraOff,
 } from "lucide-react";
 
 export const Icons = {
@@ -30,6 +31,7 @@ export const Icons = {
   monitor: Monitor,
   play: Play,
   camera: Camera,
+  cameraOff: CameraOff,
   mic: Mic,
   micOff: MicOff,
   volume1: Volume1,

@@ -1,7 +1,5 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { v4 as uuidv4 } from 'uuid'
-import * as mediasoup from 'mediasoup'
-import { WebRtcTransport } from 'mediasoup/node/lib/WebRtcTransportTypes'
 
 interface Room {
   id: string
