@@ -171,6 +171,8 @@ export default function StreamRoom() {
     }
   }
 
+  console.log("remote video refs", remoteStreams)
+
 
   const generateRoomCode = () => {
     const code = Math.random().toString(36).substring(2, 8).toUpperCase()
@@ -191,53 +193,71 @@ export default function StreamRoom() {
   }
 
   const createPeerConnection = (peerId: string, roomId: string): RTCPeerConnection => {
-    
-    const peerConnection = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
-    })
-
-    const tracked: TrackedPC = {
-      peerConnection,
-      pendingCandidates: [],
-      remoteDescSet: false,
-    };
-    peerConnections.current.set(peerId, tracked);
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        ws.current?.send(
-          JSON.stringify({
-            type: "ice-candidate",
-            targetId: peerId,
-            sourceId: clientIdRef.current,
-            roomId,
-            candidate: event.candidate,
-          })
-        )
+      const peerConnection = new RTCPeerConnection({
+        iceServers: [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" }
+        ],
+      })
+      
+      const tracked: TrackedPC = {
+        peerConnection,
+        pendingCandidates: [],
+        remoteDescSet: false,
+      };
+      peerConnections.current.set(peerId, tracked);
+  
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          ws.current?.send(
+            JSON.stringify({
+              type: "ice-candidate",
+              targetId: peerId,
+              sourceId: clientIdRef.current,
+              roomId,
+              candidate: event.candidate,
+            })
+          )
+        }
       }
-    }
-
-    peerConnection.ontrack = (event) => {
-        const [stream] = event.streams
-        let videoElement = remoteVideoRefs.current.get(peerId)
-        if (!videoElement) {
-          videoElement = createRemoteVideo(peerId);
+  
+      peerConnection.onconnectionstatechange = () => {
+        console.log(`Connection state for peer ${peerId}:`, peerConnection.connectionState);
       }
-      videoElement.srcObject = stream;
-      forceUpdate({});
-    }
-
+  
+      peerConnection.ontrack = (event) => {
+          console.log(`Received track from peer ${peerId}:`, event.streams);
+          const [stream] = event.streams;
+          if (!stream) {
+              console.error('No stream received in ontrack');
+              return;
+          }
+          remoteStreams.current.set(peerId, stream);
+          let videoElement = remoteVideoRefs.current.get(peerId);
+          if (!videoElement) {
+              videoElement = createRemoteVideo(peerId);
+          }
+          videoElement.srcObject = stream;
+          videoElement.play().catch(console.error);
+          forceUpdate({});
+      }
+  
     localStream.current?.getTracks().forEach((track) => {
-      peerConnection.addTrack(track, localStream.current!)
+      console.log('Adding track to peer connection:', track.kind);
+      try {
+        peerConnection.addTrack(track, localStream.current!);
+      } catch (error) {
+        console.error('Error adding track:', error);
+      }
     })
-
+  
     return peerConnection
   }
 
   async function setRemoteDesc(peerId: string, desc: RTCSessionDescriptionInit) {
     const tracked = peerConnections.current.get(peerId);
     if (!tracked) throw new Error("No RTCPeerConnection for " + peerId);
-  
+
     await tracked.peerConnection.setRemoteDescription(desc);
     // Mark that we can now add any queued ICE candidates
     tracked.remoteDescSet = true;
@@ -541,14 +561,17 @@ export default function StreamRoom() {
               </div>
 
               {/* Remote peers */}
-              {Array.from(remoteStreams.current.keys()).map((peerId)=> (
+              {Array.from(remoteStreams.current.keys()).map((peerId) => (
                 <div key={peerId} className="relative bg-black rounded-lg overflow-hidden aspect-video group shadow-md">
                     <video
+                        key={peerId}
                         ref={(el) => {
-                        if (el) {
-                          el.srcObject = remoteStreams.current.get(peerId) || null;
-                          remoteVideoRefs.current.set(peerId, el);
-                        }
+                            if (el) {
+                                const stream = remoteStreams.current.get(peerId);
+                                el.srcObject = stream || null;
+                                remoteVideoRefs.current.set(peerId, el);
+                                if (stream) el.play().catch(console.error);
+                            }
                         }}
                         autoPlay
                         playsInline
